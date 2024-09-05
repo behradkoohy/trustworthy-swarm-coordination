@@ -169,7 +169,6 @@ class WorldEnv(ParallelEnv):
         terminations = {}
         for agent_name, action in actions.items():
             agent_grid_num = self.agent_grid_mapping[agent_name]
-            print(actions)
             new_world, reward = self.update_grid_with_action(self.world_grid, agent_grid_num, action)
             # print(new_world)
             self.world_grid = new_world
@@ -186,7 +185,7 @@ class WorldEnv(ParallelEnv):
 
         observations = {agent: self.get_observe(agent) for agent in self.agents}
 
-        return observations, rewards, terminations, terminations, {}
+        return observations, rewards, terminations, truncations, {}
 
 
 

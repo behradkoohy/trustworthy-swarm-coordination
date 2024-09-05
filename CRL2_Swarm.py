@@ -1,105 +1,58 @@
-
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
-
+import numpy as np
 
 from WorldEnv import WorldEnv
 
-
-# class Agent(nn.Module):
-#     def __init__(self, num_actions):
-#         super().__init__()
-#
-#         self.network = nn.Sequential(
-#             self.layer_init(nn.Conv2d(3, 32, 3, stride=1, padding=1)),
-#             nn.ReLU(),
-#             self.layer_init(nn.Conv2d(32, 64, 2, stride=1, padding=1)),
-#             nn.ReLU(),
-#             # self.layer_init(nn.Conv2d(64, 64, 2, stride=1, padding=1)),
-#             # nn.ReLU(),
-#             nn.Flatten(),
-#             self.layer_init(nn.Linear(5184, 16)),
-#             nn.ReLU()
-#         )
-#         self.actor = self.layer_init(nn.Linear(16, 4), std=0.01)
-#         self.critic = self.layer_init(nn.Linear(16, 1), std=1)
-#
-#     def layer_init(self, layer, std=np.sqrt(2), bias_const=0.0):
-#         torch.nn.init.orthogonal_(layer.weight, std)
-#         torch.nn.init.constant_(layer.bias, bias_const)
-#         return layer
-#
-#     def get_value(self, x):
-#         return self.critic(self.network(x / 255.0))
-#
-#     def get_action_and_value(self, x, action=None):
-#         # hidden = self.network(x / 255.0)
-#         # x = x.permute((1, 0, 2, 3))
-#         hidden = self.network(x)
-#         # x = x.float()
-#         logits = self.actor(hidden)
-#         probs = Categorical(logits=logits)
-#         if action is None:
-#             action = probs.sample()
-#         return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-import torch
-import torch.nn as nn
-import numpy as np
-from torch.distributions import Categorical
 
 class Agent(nn.Module):
     def __init__(self, num_actions):
         super().__init__()
 
-        # Conv2d input is now (3, 10, 10), i.e., 3 channels (agents), 10x10 observation grid
         self.network = nn.Sequential(
-            self.layer_init(nn.Conv2d(3, 32, 3, stride=1, padding=1)),  # 3 input channels for the agents
+            self._layer_init(nn.Conv2d(1, 32, 3, padding=1)),
+            nn.MaxPool2d(2),
             nn.ReLU(),
-            self.layer_init(nn.Conv2d(32, 64, 2, stride=1, padding=1)),
+            self._layer_init(nn.Conv2d(32, 64, 3, padding=1)),
+            nn.MaxPool2d(2),
             nn.ReLU(),
-            nn.Flatten(),  # Flatten output for fully connected layer
-            self.layer_init(nn.Linear(64 * 11 * 11,16)),  # 64 channels * 5 * 5 after convs
-            nn.ReLU()
+            self._layer_init(nn.Conv2d(64, 128, 3, padding=1)),
+            nn.MaxPool2d(2),
+            nn.ReLU(),
+            nn.Flatten(),
+            self._layer_init(nn.Linear(128, 512)),
+            nn.ReLU(),
         )
-        self.actor = self.layer_init(nn.Linear(16, num_actions), std=0.01)  # Output actions
-        self.critic = self.layer_init(nn.Linear(16, 1), std=1)  # Output value
+        self.actor = self._layer_init(nn.Linear(512, num_actions), std=0.01)
+        self.critic = self._layer_init(nn.Linear(512, 1))
 
-    def layer_init(self, layer, std=np.sqrt(2), bias_const=0.0):
+    def _layer_init(self, layer, std=np.sqrt(2), bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
         torch.nn.init.constant_(layer.bias, bias_const)
         return layer
 
     def get_value(self, x):
-        # Expect input x to be (batch_size, 3, 10, 10)
-        x = x.unsqueeze(0) if x.dim() == 3 else x  # Add batch dimension if missing
-        x = x / 255.0  # Normalize input
-        return self.critic(self.network(x))
+        return self.critic(self.network(x / 255.0))
 
     def get_action_and_value(self, x, action=None):
-        # Ensure the input is (batch_size, 3, 10, 10)
-        x = x.unsqueeze(0) if x.dim() == 3 else x  # Add batch dimension if missing
-        x = x / 255.0  # Normalize input
-
-        hidden = self.network(x)
+        hidden = self.network(x / 255.0)
         logits = self.actor(hidden)
         probs = Categorical(logits=logits)
-
         if action is None:
             action = probs.sample()
-
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+
 
 def batchify_obs(obs, device):
     """Converts PZ style observations to batch of torch arrays."""
     # convert to list of np arrays
     obs = np.stack([obs[a] for a in obs], axis=0)
-    # breakpoint()
-    # obs = np.expand_dims(obs, axis=0)
     # transpose to be (batch, channel, height, width)
-    # obs = obs.transpose(1, 0, 2, 3)
+    # breakpoint()
+    obs = np.expand_dims(obs, axis=-1)
+    obs = obs.transpose(0, -1, 1, 2)
     # convert to torch
     obs = torch.tensor(obs).to(device)
 
@@ -110,7 +63,6 @@ def batchify(x, device):
     """Converts PZ style returns to batch of torch arrays."""
     # convert to list of np arrays
     x = np.stack([x[a] for a in x], axis=0)
-
     # convert to torch
     x = torch.tensor(x).to(device)
 
@@ -133,7 +85,6 @@ if __name__ == "__main__":
     clip_coef = 0.1
     gamma = 0.99
     batch_size = 32
-    # stack_size = 4
     frame_size = (10, 10)
     max_cycles = 125
     total_episodes = 2
@@ -142,19 +93,22 @@ if __name__ == "__main__":
     # env = pistonball_v6.parallel_env(
     #     render_mode="rgb_array", continuous=False, max_cycles=max_cycles
     # )
+    # env = color_reduction_v0(env)
+    # env = resize_v1(env, frame_size[0], frame_size[1])
+    # env = frame_stack_v1(env, stack_size=stack_size)
     env = WorldEnv()
-    num_agents = len(env.possible_agents)
+    num_agents = 3
     num_actions = env.action_space(env.possible_agents[0]).n
     observation_size = env.observation_space(env.possible_agents[0]).shape
 
     """ LEARNER SETUP """
-    agent = Agent(num_actions=4).to(device)
+    agent = Agent(num_actions=num_actions).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=0.001, eps=1e-5)
 
     """ ALGO LOGIC: EPISODE STORAGE"""
     end_step = 0
     total_episodic_return = 0
-    rb_obs = torch.zeros((max_cycles, num_agents, *frame_size)).to(device)
+    rb_obs = torch.zeros((max_cycles, num_agents,1,  *frame_size)).to(device)
     rb_actions = torch.zeros((max_cycles, num_agents)).to(device)
     rb_logprobs = torch.zeros((max_cycles, num_agents)).to(device)
     rb_rewards = torch.zeros((max_cycles, num_agents)).to(device)
@@ -175,11 +129,9 @@ if __name__ == "__main__":
             for step in range(0, max_cycles):
                 # rollover the observation
                 obs = batchify_obs(next_obs, device)
-                # print(actions)
-                print(obs.shape)
+
                 # get action from the agent
                 actions, logprobs, _, values = agent.get_action_and_value(obs)
-                print(actions)
                 # execute the environment and log data
                 next_obs, rewards, terms, truncs, infos = env.step(
                     unbatchify(actions, env)
@@ -200,6 +152,7 @@ if __name__ == "__main__":
                 if any([terms[a] for a in terms]) or any([truncs[a] for a in truncs]):
                     end_step = step
                     break
+            print(end_step)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -294,7 +247,7 @@ if __name__ == "__main__":
         print(f"Explained Variance: {explained_var.item()}")
         print("\n-------------------------------------------\n")
 
-    # """ RENDER THE POLICY """
+    """ RENDER THE POLICY """
     # env = pistonball_v6.parallel_env(render_mode="human", continuous=False)
     # env = color_reduction_v0(env)
     # env = resize_v1(env, 64, 64)
