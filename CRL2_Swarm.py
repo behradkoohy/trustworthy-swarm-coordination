@@ -1,8 +1,12 @@
+import datetime
+from datetime import time
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 from WorldEnv import WorldEnv
 
@@ -12,17 +16,17 @@ class Agent(nn.Module):
         super().__init__()
 
         self.network = nn.Sequential(
-            self._layer_init(nn.Conv2d(1, 32, 3, padding=1)),
-            nn.MaxPool2d(2),
+            self._layer_init(nn.Conv2d(1, 16, 4, padding=1)),
+            # nn.MaxPool2d(2),
             nn.ReLU(),
-            self._layer_init(nn.Conv2d(32, 64, 3, padding=1)),
-            nn.MaxPool2d(2),
+            self._layer_init(nn.Conv2d(16, 16, 3, padding=1)),
+            # nn.MaxPool2d(2),
             nn.ReLU(),
-            self._layer_init(nn.Conv2d(64, 128, 3, padding=1)),
-            nn.MaxPool2d(2),
+            self._layer_init(nn.Conv2d(16, 16, 3, padding=1)),
+            # nn.MaxPool2d(2),
             nn.ReLU(),
             nn.Flatten(),
-            self._layer_init(nn.Linear(128, 512)),
+            self._layer_init(nn.Linear(1296, 512)),
             nn.ReLU(),
         )
         self.actor = self._layer_init(nn.Linear(512, num_actions), std=0.01)
@@ -34,10 +38,10 @@ class Agent(nn.Module):
         return layer
 
     def get_value(self, x):
-        return self.critic(self.network(x / 255.0))
+        return self.critic(self.network(x))
 
     def get_action_and_value(self, x, action=None):
-        hidden = self.network(x / 255.0)
+        hidden = self.network(x)
         logits = self.actor(hidden)
         probs = Categorical(logits=logits)
         if action is None:
@@ -78,16 +82,35 @@ def unbatchify(x, env):
 
 
 if __name__ == "__main__":
+    if True:
+        import wandb
+
+        run = wandb.init(
+            project="RoboticsGridworld",
+            entity=None,
+            sync_tensorboard=True,
+            config={},
+            name="ppo_marl_gridworld",
+            monitor_gym=True,
+            save_code=True,
+        )
+    writer = SummaryWriter(f"runs/ppo_test" + str(datetime.datetime.now()))
+    # writer.add_text(
+    #     "hyperparameters",
+    #     "|param|value|\n|-|-|\n%s"
+    #     % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+    # )
+
     """ALGO PARAMS"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ent_coef = 0.1
     vf_coef = 0.1
     clip_coef = 0.1
-    gamma = 0.99
+    gamma = 0.99999
     batch_size = 32
     frame_size = (10, 10)
-    max_cycles = 125
-    total_episodes = 2
+    max_cycles = 1000
+    total_episodes = 10000
 
     """ ENV SETUP """
     # env = pistonball_v6.parallel_env(
@@ -96,7 +119,7 @@ if __name__ == "__main__":
     # env = color_reduction_v0(env)
     # env = resize_v1(env, frame_size[0], frame_size[1])
     # env = frame_stack_v1(env, stack_size=stack_size)
-    env = WorldEnv()
+    env = WorldEnv(max_timesteps=200)
     num_agents = 3
     num_actions = env.action_space(env.possible_agents[0]).n
     observation_size = env.observation_space(env.possible_agents[0]).shape
@@ -115,6 +138,7 @@ if __name__ == "__main__":
     rb_terms = torch.zeros((max_cycles, num_agents)).to(device)
     rb_values = torch.zeros((max_cycles, num_agents)).to(device)
 
+    global_step = 0
     """ TRAINING LOGIC """
     # train for n number of episodes
     for episode in range(total_episodes):
@@ -129,6 +153,7 @@ if __name__ == "__main__":
             for step in range(0, max_cycles):
                 # rollover the observation
                 obs = batchify_obs(next_obs, device)
+                global_step += 1
 
                 # get action from the agent
                 actions, logprobs, _, values = agent.get_action_and_value(obs)
@@ -145,14 +170,16 @@ if __name__ == "__main__":
                 rb_logprobs[step] = logprobs
                 rb_values[step] = values.flatten()
 
+                # print(rb_actions[step])
+
                 # compute episodic return
                 total_episodic_return += rb_rewards[step].cpu().numpy()
 
                 # if we reach termination or truncation, end
                 if any([terms[a] for a in terms]) or any([truncs[a] for a in truncs]):
                     end_step = step
+                    # print(terms, truncs)
                     break
-            print(end_step)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -165,6 +192,7 @@ if __name__ == "__main__":
                 )
                 rb_advantages[t] = delta + gamma * gamma * rb_advantages[t + 1]
             rb_returns = rb_advantages + rb_values
+
 
         # convert our episodes to batch of individual transitions
         b_obs = torch.flatten(rb_obs[:end_step], start_dim=0, end_dim=1)
@@ -235,16 +263,30 @@ if __name__ == "__main__":
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        print(f"Training episode {episode}")
-        print(f"Episodic Return: {np.mean(total_episodic_return)}")
-        print(f"Episode Length: {end_step}")
-        print("")
-        print(f"Value Loss: {v_loss.item()}")
-        print(f"Policy Loss: {pg_loss.item()}")
-        print(f"Old Approx KL: {old_approx_kl.item()}")
-        print(f"Approx KL: {approx_kl.item()}")
-        print(f"Clip Fraction: {np.mean(clip_fracs)}")
-        print(f"Explained Variance: {explained_var.item()}")
+        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
+        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+        writer.add_scalar("losses/clipfrac", np.mean(clip_fracs), global_step)
+        writer.add_scalar("losses/explained_variance", explained_var, global_step)
+        writer.add_scalar(
+            "losses/sum_total_episodic_return",
+            np.sum(total_episodic_return),
+            global_step,
+        )
+
+
+        # print(f"Training episode {episode}")
+        # print(f"Episodic Return: {np.mean(total_episodic_return)}")
+        # print(f"Episode Length: {end_step}")
+        # print("")
+        # print(f"Value Loss: {v_loss.item()}")
+        # print(f"Policy Loss: {pg_loss.item()}")
+        # print(f"Old Approx KL: {old_approx_kl.item()}")
+        # print(f"Approx KL: {approx_kl.item()}")
+        # print(f"Clip Fraction: {np.mean(clip_fracs)}")
+        # print(f"Explained Variance: {explained_var.item()}")
         print("\n-------------------------------------------\n")
 
     """ RENDER THE POLICY """

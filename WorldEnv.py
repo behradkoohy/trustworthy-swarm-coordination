@@ -91,8 +91,10 @@ class WorldEnv(ParallelEnv):
         self.world_grid = np.zeros((self.max_x, self.max_y))
         starting_locations = []
         while len(starting_locations) < self.n_drones:
-            rand_x = random.randint(0, 3)
-            rand_y = random.randint(0, 3)
+            # rand_x = random.randint(0, 3)
+            # rand_y = random.randint(0, 3)
+            rand_x = random.randint(0, 9)
+            rand_y = random.randint(0, 9)
             if (rand_x, rand_y) not in starting_locations:
                 starting_locations.append((rand_x, rand_y))
 
