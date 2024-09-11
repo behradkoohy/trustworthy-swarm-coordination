@@ -98,3 +98,4 @@ if __name__ == "__main__":
     cost, pos = optimizer.optimize(objective_function, iters=args.iterations)
     # writer.add_scalar("opt/final_cost", v_loss.item(), global_step)
     wandb.run.summary["cost"] = cost
+    wandb.run.summary["seed"] = args.seed
