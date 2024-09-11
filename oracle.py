@@ -1,12 +1,28 @@
+from datetime import datetime
+
 import numpy as np
-from WorldEnvOHE import WorldEnv
+from str2bool import str2bool as strtobool
+from WorldEnvOHEOracle import WorldEnv
 from DiscretePySwarms import IntOptimizerPSO
+from torch.utils.tensorboard import SummaryWriter
 import argparse
 np.set_printoptions(threshold=np.inf)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="seed")
-    parser.add_argument("--seed", type=int, help="An example seed")
+    parser.add_argument(
+        "--track",
+        type=lambda x: bool(strtobool(x)),
+        default=True,
+        nargs="?",
+        const=True,
+        help="if toggled, this experiment will be tracked with Weights and Biases",
+    )
+    parser.add_argument("--seed", type=int, help="An example seed", default=0)
+    parser.add_argument("--n_particles", type=int, help="The number of particles.", default=10)
+    parser.add_argument("--iterations", type=int, help="The number of iterations to run.", default=1000)
+    parser.add_argument("--episode_length", type=int, help="The length of an episode.", default=100)
+    parser.add_argument("--n_drones", type=int, help="The number of drones in sim.", default=3)
     return parser.parse_args()
 
 def get_fitness(env,actions):
@@ -49,19 +65,36 @@ def generate_actions(environment,timesteps):
     return actions_over_timesteps
 
 def objective_function(solution):
-    env = WorldEnv(n_drones=3,seed=r_seed)
+    env = WorldEnv(n_drones=args.n_drones,seed=r_seed, max_timesteps=args.episode_length)
     observations, infos = env.reset()
     score = [-get_fitness(env,sol) for sol in solution]
     return score
 
-max_bound = [3 for _ in range((1000 + 1) * 3)]
-min_bound = [0 for _ in range((1000 + 1) * 3)]
-bounds = (min_bound, max_bound)
-options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
 
 if __name__ == "__main__":
     #random seed
     args = parse_args()
-    optimizer = IntOptimizerPSO(n_particles=10, dimensions=(3000)+3, options=options, bounds=bounds)
+
+    if args.track:
+        import wandb
+        run = wandb.init(
+            project="PSO_RoboticsGridworld",
+            entity=None,
+            sync_tensorboard=True,
+            config={},
+            name="ppo_marl_gridworld",
+            monitor_gym=True,
+            save_code=True,
+        )
+    writer = SummaryWriter(f"runs/ppo_test" + str(datetime.now()))
+
+    max_bound = [3 for _ in range((args.episode_length + 1) * args.n_drones)]
+    min_bound = [0 for _ in range((args.episode_length + 1) * args.n_drones)]
+    bounds = (min_bound, max_bound)
+    options = {"c1": 0.5, "c2": 0.3, "w": 0.9}
+
+    optimizer = IntOptimizerPSO(n_particles=args.n_particles, dimensions=(args.episode_length*args.n_drones)+3, options=options, bounds=bounds, wandb_track=writer)
     r_seed=args.seed
-    cost, pos = optimizer.optimize(objective_function, iters=10)
+    cost, pos = optimizer.optimize(objective_function, iters=args.iterations)
+    # writer.add_scalar("opt/final_cost", v_loss.item(), global_step)
+    wandb.run.summary["cost"] = cost

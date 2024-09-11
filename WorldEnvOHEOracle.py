@@ -2,6 +2,7 @@ import functools
 import random
 
 import numpy as np
+import numpy.random
 from gymnasium.spaces import Discrete, Box
 from pettingzoo import ParallelEnv
 
@@ -14,9 +15,7 @@ from pettingzoo import ParallelEnv
 
 
 class WorldEnv(ParallelEnv):
-    def __init__(self, n_drones=3, n_humans=2, drone_locations=None, human_locations=[(2, 6), (6, 4)], targets=[(9, 9)],
-                 reward_human=-20, reward_safe_zone=-5, reward_target=100, render_mode=None, max_x=10, max_y=10,
-                 max_timesteps=300):
+    def __init__(self, n_drones=3, n_humans=2, drone_locations = None, human_locations = [(2,6), (6,4)], targets = [(9,9)], reward_human=-10000, reward_safe_zone=-5000, reward_target=100, render_mode=None, max_x=10, max_y=10, max_timesteps=300,seed=0):
         self.n_drones = n_drones
         self.n_humans = n_humans
         self.possible_agents = ['drone_' + str(x) for x in range(n_drones)]
@@ -34,6 +33,8 @@ class WorldEnv(ParallelEnv):
         self.all_grids = np.array([])
         self.unavailable_locs = np.array([])
         self.reward_dictionary = {0: reward_human, 1: reward_safe_zone, 2: reward_target}
+
+        self.seed = seed
 
     def render(self):
         """In future, generate a path diagram to show what the agent has done"""
@@ -87,9 +88,10 @@ class WorldEnv(ParallelEnv):
 
     def get_agent_start_point_OHE(self, world_grid, unavailable_locs):
         loc = None
+        random.seed(self.seed)
         while world_grid.sum() == 0:
-            rand_x = random.randint(0, self.max_x - 1)  # Make it self.max_x
-            rand_y = random.randint(0, self.max_y - 1)
+            rand_x = random.randint(0, int(self.max_x/2))  # Make it self.max_x
+            rand_y = random.randint(0, int(self.max_y/2))
             loc = (rand_x, rand_y)
             if loc not in unavailable_locs:
                 world_grid[rand_x, rand_y] = 1

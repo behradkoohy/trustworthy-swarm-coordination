@@ -91,10 +91,10 @@ class WorldEnv(ParallelEnv):
         self.world_grid = np.zeros((self.max_x, self.max_y))
         starting_locations = []
         while len(starting_locations) < self.n_drones:
-            # rand_x = random.randint(0, 3)
-            # rand_y = random.randint(0, 3)
-            rand_x = random.randint(0, 9)
-            rand_y = random.randint(0, 9)
+            rand_x = random.randint(0, 3)
+            rand_y = random.randint(0, 3)
+            # rand_x = random.randint(0, 9)
+            # rand_y = random.randint(0, 9)
             if (rand_x, rand_y) not in starting_locations:
                 starting_locations.append((rand_x, rand_y))
 
@@ -124,9 +124,10 @@ class WorldEnv(ParallelEnv):
         # Find the current position of the agent
         agent_position = np.argwhere(world_grid == agent_num)
         if len(agent_position) == 0:
-            return world_grid, 5
+            return world_grid, 1
         # Extract agent's current coordinates
         current_x, current_y = agent_position[0]
+        agent_heuristic = (18 - (abs(9 - current_x) + abs(9 - current_y)))
         # Determine the new position based on the action
         if action == 0:  # Move up
             new_x, new_y = current_x - 1, current_y
@@ -143,13 +144,13 @@ class WorldEnv(ParallelEnv):
             # Check if the new position is empty (contains a 0)
             if world_grid[new_x, new_y] in [0, 3, 4]:
                 # Get reward from zone
-                reward = self.reward_dictionary[world_grid[new_x, new_y]]
+                reward = self.reward_dictionary[world_grid[new_x, new_y]] + agent_heuristic
                 # Move the agent to the new position
                 world_grid[new_x, new_y] = agent_num
                 # Set the agent's old position to 0 (empty)
                 world_grid[current_x, current_y] = 0
             elif world_grid[new_x, new_y] in [5]:
-                reward = self.reward_dictionary[world_grid[new_x, new_y]]
+                reward = self.reward_dictionary[world_grid[new_x, new_y]] + agent_heuristic
                 world_grid[new_x, new_y] = 5
                 world_grid[current_x, current_y] = 0
             # self.world_grid[2, 6] = 3
@@ -183,9 +184,9 @@ class WorldEnv(ParallelEnv):
         self.num_moves += 1
 
         env_truncation = self.num_moves >= self.max_timesteps
-        truncations = {agent: env_truncation for agent in self.agents}
+        truncations = {agent: env_truncation for agent in actions.keys()}
 
-        observations = {agent: self.get_observe(agent) for agent in self.agents}
+        observations = {agent: self.get_observe(agent) for agent in actions.keys()}
 
         return observations, rewards, terminations, truncations, {}
 

@@ -88,7 +88,7 @@ class IntStar(ps.backend.topology.Topology):
 
 # Define custom Optimizer class
 class IntOptimizerPSO(ps.base.SwarmOptimizer):
-    def __init__(self, n_particles, dimensions, options, bounds=None, initpos=None):
+    def __init__(self, n_particles, dimensions, options, bounds=None, initpos=None, wandb_track=None):
         super(IntOptimizerPSO, self).__init__(
             n_particles=n_particles,
             dimensions=dimensions,
@@ -105,6 +105,7 @@ class IntOptimizerPSO(ps.base.SwarmOptimizer):
         self.top = IntStar()
         self.rep = ps.utils.Reporter(logger=logging.getLogger(__name__))
         self.name = __name__
+        self.wandb_track = wandb_track
 
     # More or less copy-paste of the optimize method of the GeneralOptimizerPSO
     def optimize(self, func, iters, n_processes=None):
@@ -131,6 +132,7 @@ class IntOptimizerPSO(ps.base.SwarmOptimizer):
             self.swarm.position = self.top.compute_position(
                 self.swarm, self.bounds, self.bh
             )  # compute_int_position(self.swarm, self.bounds, self.bh)
+            self.wandb_track.add_scalar("losses/best_sol_cost", self.swarm.best_cost, i)
         final_best_cost = self.swarm.best_cost.copy()
         final_best_pos = self.swarm.pbest_pos[self.swarm.pbest_cost.argmin()].copy()
         self.rep.log(
