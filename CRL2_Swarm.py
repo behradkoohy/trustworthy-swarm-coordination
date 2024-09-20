@@ -136,7 +136,7 @@ def parse_args():
     parser.add_argument(
         "--distinct-actor-critic",
         type=lambda x: bool(strtobool(x)),
-        default=False,
+        default=True,
         nargs="?",
         const=True,
         help="If true, actor and critic will be two separate NNs. If false, actor and critic will be one NN with separate output heads.",
