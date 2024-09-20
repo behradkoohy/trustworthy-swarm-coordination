@@ -15,7 +15,7 @@ from pettingzoo import ParallelEnv
 
 class WorldEnv(ParallelEnv):
     def __init__(self, n_drones=3, n_humans=2, drone_locations=None, human_locations=[(2, 6), (6, 4)], targets=[(9, 9)],
-                 reward_human=-10, reward_safe_zone=-10, reward_target=100, render_mode=None, max_x=10, max_y=10,
+                 reward_human=-10, reward_safe_zone=-100, reward_target=100, render_mode=None, max_x=10, max_y=10,
                  max_timesteps=300,seed=None):
         self.n_drones = n_drones
         self.n_humans = n_humans

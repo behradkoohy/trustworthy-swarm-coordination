@@ -378,9 +378,10 @@ if __name__ == "__main__":
         # collect an episode
         with torch.no_grad():
             # collect observations and convert to batch of torch tensors
-            t_seed = random.randint(0,30)
+            # t_seed = random.randint(0,30)
             # print(t_seed)
-            next_obs, info = env.reset(seed=t_seed)
+            # next_obs, info = env.reset(seed=t_seed)
+            next_obs, info = env.reset()
             # reset the episodic return
             total_episodic_return = 0
 
@@ -507,18 +508,18 @@ if __name__ == "__main__":
                         or terms == []
                 ):
                     end_step = step
-                    # print(
-                    #     episode,
-                    #     end_step,
-                    #     terms,
-                    #     # truncs,
-                    #     total_episodic_return,
-                    #     sum(total_episodic_return),
-                    #     # dead_agent_step,
-                    #     sum(dead_agent_step.values()),
-                    #     agent_welford if args.agent_reward_norm else None,
-                    # )
-                    print("SEED:", t_seed, step, safe_zones_hit, episode)
+                    print(
+                        episode,
+                        end_step,
+                        terms,
+                        # truncs,
+                        total_episodic_return,
+                        sum(total_episodic_return),
+                        # dead_agent_step,
+                        sum(dead_agent_step.values()),
+                        agent_welford if args.agent_reward_norm else None,
+                    )
+                    # print("SEED:", t_seed, step, safe_zones_hit, episode)
                     # env.show_grid(env.all_grids)
                     break
 
@@ -658,7 +659,7 @@ if __name__ == "__main__":
         writer.add_scalar("eval/drone_0_reward", total_episodic_return[0], global_step)
         writer.add_scalar("eval/drone_1_reward", total_episodic_return[1], global_step)
         writer.add_scalar("eval/drone_2_reward", total_episodic_return[2], global_step)
-        writer.add_scalar("eval/t_seed", t_seed, global_step)
+        # writer.add_scalar("eval/t_seed", t_seed, global_step)
         if args.agent_reward_norm:
             writer.add_scalar(
                 "eval/drone_0_mean", agent_welford["drone_0"].mean[0], global_step
