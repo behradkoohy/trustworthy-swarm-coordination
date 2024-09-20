@@ -1,6 +1,7 @@
 import datetime
 import argparse
 import math
+import random
 import warnings
 
 from str2bool import str2bool as strtobool
@@ -11,8 +12,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-from welford import Welford
-
+# from welford import Welford
+from WelfordR import WelfordR
 from WorldEnvOHE import WorldEnv
 
 
@@ -22,6 +23,8 @@ def parse_args():
     Experiment parameters
     """
     parser.add_argument("--exp_name", type=str, default="CRL_PPO")
+
+
     parser.add_argument(
         "--track",
         type=lambda x: bool(strtobool(x)),
@@ -37,7 +40,7 @@ def parse_args():
     parser.add_argument(
         "--episode_length",
         type=int,
-        default=1000,
+        default=500,
         nargs="?",
         const=True,
         help="The maximum length in steps of an episode before the episode is truncated",
@@ -45,7 +48,7 @@ def parse_args():
     parser.add_argument(
         "--num-episodes",
         type=int,
-        default=10000,
+        default=2500,
         help="total episodes of the experiments",
     )
 
@@ -53,7 +56,7 @@ def parse_args():
     Default PPO Parameters
     """
     parser.add_argument(
-        "--ent-coef", type=float, default=0.001, help="coefficient of the entropy"
+        "--ent-coef", type=float, default=0.05, help="coefficient of the entropy"
     )
     parser.add_argument(
         "--vf-coef", type=float, default=0.1, help="coefficient of the value function"
@@ -65,7 +68,7 @@ def parse_args():
         help="the surrogate clipping coefficient",
     )
     parser.add_argument(
-        "--gamma", type=float, default=0.999, help="the discount factor gamma"
+        "--gamma", type=float, default=0.9999, help="the discount factor gamma"
     )
     parser.add_argument(
         "--batch-size", type=int, default=128 * 4, help="the discount factor gamma"
@@ -79,7 +82,7 @@ def parse_args():
     parser.add_argument(
         "--agent-reward-norm",
         type=lambda x: bool(strtobool(x)),
-        default=True,
+        default=False,
         nargs="?",
         const=True,
         help="if toggled, PPO will compute the mean and std for the reward and use it to normalise the reward",
@@ -119,7 +122,7 @@ def parse_args():
     parser.add_argument(
         "--gae-coef",
         type=float,
-        default=0.95,
+        default=0.9999,
         help="The GAE Coefficient used for return estimation.",
     )
     parser.add_argument(
@@ -133,7 +136,7 @@ def parse_args():
     parser.add_argument(
         "--distinct-actor-critic",
         type=lambda x: bool(strtobool(x)),
-        default=True,
+        default=False,
         nargs="?",
         const=True,
         help="If true, actor and critic will be two separate NNs. If false, actor and critic will be one NN with separate output heads.",
@@ -180,7 +183,7 @@ class Agent(nn.Module):
         super().__init__()
         if args.distinct_actor_critic:
             self.actor = nn.Sequential(
-                self._layer_init(nn.Conv2d(8, 16, 4, padding=1)),
+                self._layer_init(nn.Conv2d(5, 16, 4, padding=1)),
                 nn.ReLU(),
                 self._layer_init(nn.Conv2d(16, 16, 3, padding=1)),
                 nn.ReLU(),
@@ -190,7 +193,7 @@ class Agent(nn.Module):
                 self._layer_init(nn.Linear(128, num_actions), std=0.01),
             )
             self.critic = nn.Sequential(
-                self._layer_init(nn.Conv2d(8, 16, 4, padding=1)),
+                self._layer_init(nn.Conv2d(5, 16, 4, padding=1)),
                 nn.ReLU(),
                 self._layer_init(nn.Conv2d(16, 16, 3, padding=1)),
                 nn.ReLU(),
@@ -201,7 +204,7 @@ class Agent(nn.Module):
             )
         else:
             self.network = nn.Sequential(
-                self._layer_init(nn.Conv2d(8, 16, 4, padding=1)),
+                self._layer_init(nn.Conv2d(5, 16, 4, padding=1)),
                 nn.ReLU(),
                 self._layer_init(nn.Conv2d(16, 16, 3, padding=1)),
                 nn.ReLU(),
@@ -276,8 +279,7 @@ def batchify(x, device):
 def unbatchify(x, env):
     """Converts np array to PZ style arguments."""
     x = x.cpu().numpy()
-    x = {a: x[i] for i, a in enumerate(env.possible_agents)}
-
+    x = {a: x[i] for i, a in enumerate(env.agents)}
     return x
 
 
@@ -327,17 +329,18 @@ if __name__ == "__main__":
     """ ALGO LOGIC: EPISODE STORAGE"""
     end_step = 0
     total_episodic_return = 0
-    rb_obs = torch.zeros((max_cycles, num_agents, 8, *frame_size)).to(device)
+    rb_obs = torch.zeros((max_cycles, num_agents, 5, *frame_size)).to(device)
     rb_actions = torch.zeros((max_cycles, num_agents)).to(device)
     rb_logprobs = torch.zeros((max_cycles, num_agents)).to(device)
     rb_rewards = torch.zeros((max_cycles, num_agents)).to(device)
     rb_terms = torch.zeros((max_cycles, num_agents)).to(device)
     rb_values = torch.zeros((max_cycles, num_agents)).to(device)
     rb_action_masks = torch.zeros((max_cycles, num_agents, num_actions)).to(device)
+    rb_mask = torch.zeros((max_cycles+1, num_agents)).to(device)
     global_step = 0
 
     if args.agent_reward_norm:
-        agent_welford = {agent: Welford() for agent in env.possible_agents}
+        agent_welford = {agent: WelfordR() for agent in env.possible_agents}
 
     if args.warmup_arn:
         if not args.agent_reward_norm:
@@ -347,20 +350,21 @@ if __name__ == "__main__":
         else:
             obs, infos = env.reset()
             print("Warming up ARN with random actions")
-            for step in range(0, args.episode_length):
-                actions = {
-                    agent: env.action_space(agent).sample() for agent in env.agents
-                }
-                observations, rewards, terms, truncs, infos = env.step(actions)
-                for agt in env.agents:
-                    agent_welford[agt].add(np.array([rewards[agt]]))
-                if (
-                    all([terms[a] for a in terms])
-                    or all([truncs[a] for a in truncs])
-                    or terms == []
-                ):
-                    print("Warm up complete.")
-                    break
+            for x in range(100):
+                for step in range(0, args.episode_length):
+                    actions = {
+                        agent: env.action_space(agent).sample() for agent in env.agents
+                    }
+                    observations, rewards, terms, truncs, infos = env.step(actions)
+                    for agt in env.agents:
+                        agent_welford[agt].add(np.array([rewards[agt]]))
+                    if (
+                            all([terms[a] for a in terms])
+                            or all([truncs[a] for a in truncs])
+                            or terms == []
+                    ):
+                        break
+            print("Warm up complete.")
 
     """ TRAINING LOGIC """
     # train for n number of episodes
@@ -369,19 +373,23 @@ if __name__ == "__main__":
             frac = 1.0 - (episode / args.num_episodes)
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
+
+        rb_mask[0] = torch.tensor([False, False, False])
         # collect an episode
         with torch.no_grad():
             # collect observations and convert to batch of torch tensors
-            next_obs, info = env.reset()
+            t_seed = random.randint(0,30)
+            # print(t_seed)
+            next_obs, info = env.reset(seed=t_seed)
             # reset the episodic return
             total_episodic_return = 0
 
             dead_agents = []
-            alive_agents = [agt for agt in env.possible_agents]
+            alive_agents = [agt for agt in env.agents]
             dead_agent_step = {
-                agt: args.episode_length - 1 for agt in env.possible_agents
+                agt: args.episode_length for agt in env.agents
             }
-
+            safe_zones_hit = 0
             # each episode has num_steps
             for step in range(0, args.episode_length):
                 # rollover the observation
@@ -390,12 +398,18 @@ if __name__ == "__main__":
 
                 # get action masks for agent
                 if args.action_masks:
-                    masks = torch.tensor(
-                        [env.get_action_masks(ob, n) for n, ob in enumerate(obs)]
-                    )
-                    actions, logprobs, _, values = agent.get_action_and_value(
-                        obs, action_masks=masks
-                    )
+                    # unbatched_masks = [env.get_action_masks(env.all_grids, n) for n, ob in enumerate(obs)]
+                    # breakpoint()
+                    try:
+                        masks = torch.tensor(
+                            [env.get_action_masks(env.all_grids, env.agent_name_mapping[agt]) for agt in env.agents]
+                        )
+                        actions, logprobs, _, values = agent.get_action_and_value(
+                            obs, action_masks=masks
+                        )
+                    except Exception as e:
+                        breakpoint()
+                        raise e
                 else:
                     # get action from the agent
                     actions, logprobs, _, values = agent.get_action_and_value(obs)
@@ -404,41 +418,79 @@ if __name__ == "__main__":
                 next_obs, rewards, terms, truncs, infos = env.step(
                     unbatchify(actions, env)
                 )
+
+
                 # normalise the agent reward via scaling and shaping
                 if args.agent_reward_norm:
                     for agt in env.possible_agents:
                         agent_welford[agt].add(np.array([rewards[agt]]))
-                        # print(agt, agent_welford[agt].mean[0], agent_welford[agt].var_s[0])
                         if global_step < 2 or agent_welford[agt].var_s[0] == 0.0:
                             pass
                         else:
-                            # print(global_step, agent_welford[agt].var_s[0], math.sqrt(agent_welford[agt].var_s[0]))
-                            rewards[agt] = (
-                                rewards[agt] - agent_welford[agt].mean[0]
-                            ) / math.sqrt(agent_welford[agt].var_s[0] + 1e-8)
+                            rewards[agt] = (rewards[agt] - agent_welford[agt].mean[0]) / math.sqrt(agent_welford[agt].var_s[0] + 1e-8)
 
                 for agt, reward in rewards.items():
+                    if reward <= -1:
+                        safe_zones_hit += 1
                     if args.reward_clip > 0:
                         rewards[agt] = np.clip(
                             reward, -args.reward_clip, args.reward_clip
                         )
 
-                if any([terms[a] for a in alive_agents]):
-                    # dead_agents = dead_agents + [a for a in alive_agents if terms[a]]
-                    for agt in alive_agents:
-                        if terms[agt]:
-                            dead_agent_step[agt] = step
-                            alive_agents.remove(agt)
-                            dead_agents.append(agt)
+                # breakpoint()
+                # if episode == 99:
+                #     env.show_grid(env.all_grids)
+                # for agt in dead_agents:
+                #     terms[agt] = True
+                #     rewards[agt] = 0.0
 
-                for agt in dead_agents:
-                    terms[agt] = True
-                    rewards[agt] = 0.0
+                # before we remove any newly dead agents, we need to make sure everything else is on point
+                if len(env.agents) < 3:
+                    # unbatched_next_obs = unbatchify(next_obs, env)
+                    unbatched_obs = unbatchify(obs, env)
+                    unbatched_actions = unbatchify(actions, env)
+                    unbatched_logprobs = unbatchify(logprobs, env)
+                    unbatched_values = unbatchify(values[:,0], env)
+                    if args.action_masks:
+                        unbatched_masks = {agt: m for agt, m in zip(env.agents, masks.tolist())}
+
+
+                    for agt in dead_agents:
+                        # next_obs[agt] = np.zeros((5,10,10), dtype=np.float32)
+
+                        unbatched_obs[agt] = np.zeros((5,10,10))
+
+                        rewards[agt] = 0.0
+                        terms[agt] = True
+                        unbatched_actions[agt] = 3
+                        unbatched_logprobs[agt] = 0
+                        unbatched_values[agt] = 0
+                        if args.action_masks:
+                            unbatched_masks[agt] = [False, False, False, False]
+
+                    obs = batchify(unbatched_obs, device)
+                    actions = batchify(unbatched_actions, device)
+                    logprobs = batchify(unbatched_logprobs, device)
+                    values = batchify(unbatched_values, device)
+                    if args.action_masks:
+                        masks = batchify(unbatched_masks, device)
+
+
+                # Deal with a dead agent, remove from game and add to the dead agent repo
+                for agt in (agt for agt in terms if terms[agt] and agt not in dead_agents):
+                    dead_agent_step[agt] = step
+                    env.agents.remove(agt)
+                    alive_agents.remove(agt)
+                    dead_agents.append(agt)
+
+                # if episode == 99:
+                #     env.show_grid(env.all_grids)
 
                 # add to episode storage
                 rb_obs[step] = obs
                 rb_rewards[step] = batchify(rewards, device)
                 rb_terms[step] = batchify(terms, device)
+                rb_mask[step+1] = batchify(terms, device)
                 rb_actions[step] = actions
                 rb_logprobs[step] = logprobs
                 rb_values[step] = values.flatten()
@@ -446,24 +498,28 @@ if __name__ == "__main__":
                     rb_action_masks[step] = masks
                 # compute episodic return
                 total_episodic_return += rb_rewards[step].cpu().numpy()
+                # print({r:int(x) for r,x in rewards.items()}, rb_rewards[step], total_episodic_return, actions, env.agent_position)
 
                 # if we reach termination or truncation, end
                 if (
-                    all([terms[a] for a in terms])
-                    or all([truncs[a] for a in truncs])
-                    or terms == []
+                        all([terms[a] for a in terms])
+                        or all([truncs[a] for a in truncs])
+                        or terms == []
                 ):
                     end_step = step
-                    print(
-                        episode,
-                        end_step,
-                        terms,
-                        truncs,
-                        total_episodic_return,
-                        sum(total_episodic_return),
-                        dead_agent_step,
-                        sum(dead_agent_step.values()),
-                    )
+                    # print(
+                    #     episode,
+                    #     end_step,
+                    #     terms,
+                    #     # truncs,
+                    #     total_episodic_return,
+                    #     sum(total_episodic_return),
+                    #     # dead_agent_step,
+                    #     sum(dead_agent_step.values()),
+                    #     agent_welford if args.agent_reward_norm else None,
+                    # )
+                    print("SEED:", t_seed, step, safe_zones_hit, episode)
+                    # env.show_grid(env.all_grids)
                     break
 
         # bootstrap value if not done
@@ -497,23 +553,27 @@ if __name__ == "__main__":
         )
 
         if args.remove_dead_agents:
-            b_terms = torch.flatten(rb_terms[:end_step])
-            b_terms = ~(b_terms > 0)
-            for agt_end in dead_agent_step.values():
-                b_terms[agt_end] = True
-            b_obs = b_obs[b_terms]
-            b_logprobs = torch.masked_select(b_logprobs, b_terms)
-            b_actions = torch.masked_select(b_actions, b_terms)
-            b_returns = torch.masked_select(b_returns, b_terms)
-            b_values = torch.masked_select(b_values, b_terms)
-            b_advantages = torch.masked_select(b_advantages, b_terms)
+            # for n, agt_end in enumerate(dead_agent_step.values()):
+            #     rb_terms[agt_end][n] = 0
+            # b_terms = torch.flatten(rb_terms[:end_step])
+            # b_terms = ~(b_terms > 0)
+
+
+            b_mask = torch.logical_not(torch.flatten(rb_mask[:end_step], start_dim=0, end_dim=1))
+
+            b_obs = b_obs[b_mask]
+            b_logprobs = torch.masked_select(b_logprobs, b_mask)
+            b_actions = torch.masked_select(b_actions, b_mask)
+            b_returns = torch.masked_select(b_returns, b_mask)
+            b_values = torch.masked_select(b_values, b_mask)
+            b_advantages = torch.masked_select(b_advantages, b_mask)
 
             if args.action_masks:
-                b_action_masks = b_action_masks[b_terms]
+                b_action_masks = b_action_masks[b_mask]
 
-            for agt_end in dead_agent_step.values():
-                b_terms[agt_end] = False
-            b_terms = ~b_terms
+            # for agt_end in dead_agent_step.values():
+            #     b_terms[agt_end] = False
+            # b_terms = ~b_terms
 
         # Optimizing the policy and value network
         b_index = np.arange(len(b_obs))
@@ -598,6 +658,7 @@ if __name__ == "__main__":
         writer.add_scalar("eval/drone_0_reward", total_episodic_return[0], global_step)
         writer.add_scalar("eval/drone_1_reward", total_episodic_return[1], global_step)
         writer.add_scalar("eval/drone_2_reward", total_episodic_return[2], global_step)
+        writer.add_scalar("eval/t_seed", t_seed, global_step)
         if args.agent_reward_norm:
             writer.add_scalar(
                 "eval/drone_0_mean", agent_welford["drone_0"].mean[0], global_step
@@ -618,6 +679,9 @@ if __name__ == "__main__":
                 "eval/drone_2_var", agent_welford["drone_2"].var_s[0], global_step
             )
 
+    torch.save(agent.actor.state_dict(), 'actor.model')
+    torch.save(agent.critic.state_dict(), 'critic.model')
+
         # print(f"Training episode {episode}")
         # print(f"Episodic Return: {np.mean(total_episodic_return)}")
         # print(f"Episode Length: {end_step}")
@@ -629,6 +693,38 @@ if __name__ == "__main__":
         # print(f"Clip Fraction: {np.mean(clip_fracs)}")
         # print(f"Explained Variance: {explained_var.item()}")
         # print("\n-------------------------------------------\n")
+    exit()
+    agent.eval()
+    args.action_masks = False
+    episode_length = []
+    with torch.no_grad():
+        for seed in range(30):
+            dead_agents = []
+            next_obs, infos = env.reset(seed=seed)
+            for step in range(args.episode_length):
+                try:
+                    obs = batchify_obs(next_obs, device)
+                except ValueError as e:
+                    breakpoint()
+                    raise e
+                masks = torch.tensor([env.get_action_masks(env.all_grids, env.agent_name_mapping[agt]) for agt in env.agents])
+                actions, logprobs, _, values = agent.get_action_and_value(obs, action_masks=masks)
+                next_obs, rewards, terms, truncs, infos = env.step(unbatchify(actions, env))
+                # env.show_grid(env.all_grids)
+
+                for agt in (agt for agt in terms if terms[agt] and agt not in dead_agents):
+                    dead_agents.append(agt)
+                    env.agents.remove(agt)
+
+                if (
+                        all([terms[a] for a in terms])
+                        or all([truncs[a] for a in truncs])
+                        or terms == []
+                        or env.agents == []
+                ):
+                    end_step = step
+
+                    break
 
     """ RENDER THE POLICY """
     # env = pistonball_v6.parallel_env(render_mode="human", continuous=False)

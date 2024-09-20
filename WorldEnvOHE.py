@@ -15,8 +15,8 @@ from pettingzoo import ParallelEnv
 
 class WorldEnv(ParallelEnv):
     def __init__(self, n_drones=3, n_humans=2, drone_locations=None, human_locations=[(2, 6), (6, 4)], targets=[(9, 9)],
-                 reward_human=-20, reward_safe_zone=-5, reward_target=100, render_mode=None, max_x=10, max_y=10,
-                 max_timesteps=300):
+                 reward_human=-10, reward_safe_zone=-10, reward_target=100, render_mode=None, max_x=10, max_y=10,
+                 max_timesteps=300,seed=None):
         self.n_drones = n_drones
         self.n_humans = n_humans
         self.possible_agents = ['drone_' + str(x) for x in range(n_drones)]
@@ -34,6 +34,10 @@ class WorldEnv(ParallelEnv):
         self.all_grids = np.array([])
         self.unavailable_locs = np.array([])
         self.reward_dictionary = {0: reward_human, 1: reward_safe_zone, 2: reward_target}
+
+        self.agent_position = {}
+
+        self.seed = seed
 
     def render(self):
         """In future, generate a path diagram to show what the agent has done"""
@@ -57,29 +61,45 @@ class WorldEnv(ParallelEnv):
         """
         Pass in an agent_id and get an observation space for them.
         """
-        agent_grid_value = self.agent_grid_mapping[agent]
-        other_agents = [x for x in self.agent_grid_mapping.values() if x != agent_grid_value]
-        agent_observe = np.array(self.all_grids)
+        human, safe_zone, target, drone_0, drone_1, drone_2 = self.all_grids
 
-        # Create a OHE grid for other agents and the current agent
-        other_agents_grid = np.zeros((self.max_x, self.max_y))
-        current_agents_grid = np.zeros((self.max_x, self.max_y))
 
-        # Fill out the other agents grid
-        other_agent_positions = []
-        for other_agent in other_agents:
-            other_agent_positions.append(np.argwhere(agent_observe[other_agent] == 1)[0])
-        for other_x, other_y in other_agent_positions:
-            other_agents_grid[other_x, other_y] = 1
 
-        # FIll out the current agent grid
-        current_agent_position = np.argwhere(agent_observe[agent_grid_value] == 1)[0]
-        current_agents_grid[current_agent_position[0], current_agent_position[1]] = 1
+        if agent == "drone_0":
+            obs = np.array([human, safe_zone, target, drone_0, np.sum([drone_1, drone_2], axis=0)], dtype=np.float32)
+        elif agent == "drone_1":
+            obs = np.array([human, safe_zone, target, drone_1, np.sum([drone_0, drone_2], axis=0)], dtype=np.float32)
+        elif agent == "drone_2":
+            obs = np.array([human, safe_zone, target, drone_2, np.sum([drone_0, drone_1], axis=0)], dtype=np.float32)
 
-        # Concatenate observations to the overall OHE environment
-        agent_observe = np.append(agent_observe, np.array([current_agents_grid]), axis=0)
-        agent_observe = np.append(agent_observe, np.array([other_agents_grid]), axis=0)
-        return np.array(agent_observe, dtype=np.float32)
+        # if len(self.agents) < 3:
+        #     breakpoint()
+
+        return obs
+
+        # agent_grid_value = self.agent_grid_mapping[agent]
+        # other_agents = [x for x in self.agent_grid_mapping.values() if x != agent_grid_value]
+        # agent_observe = np.array(self.all_grids)
+        #
+        # # Create a OHE grid for other agents and the current agent
+        # other_agents_grid = np.zeros((self.max_x, self.max_y))
+        # current_agents_grid = np.zeros((self.max_x, self.max_y))
+        #
+        # # Fill out the other agents grid
+        # other_agent_positions = []
+        # for other_agent in other_agents:
+        #     other_agent_positions.append(np.argwhere(agent_observe[other_agent] == 1)[0])
+        # for other_x, other_y in other_agent_positions:
+        #     other_agents_grid[other_x, other_y] = 1
+        #
+        # # FIll out the current agent grid
+        # current_agent_position = np.argwhere(agent_observe[agent_grid_value] == 1)[0]
+        # current_agents_grid[current_agent_position[0], current_agent_position[1]] = 1
+        #
+        # # Concatenate observations to the overall OHE environment
+        # agent_observe = np.append(agent_observe, np.array([current_agents_grid]), axis=0)
+        # agent_observe = np.append(agent_observe, np.array([other_agents_grid]), axis=0)
+        # return np.array(agent_observe, dtype=np.float32)
 
     """
     When agent start points are not provided, this function initialises their position randomly.
@@ -87,9 +107,10 @@ class WorldEnv(ParallelEnv):
 
     def get_agent_start_point_OHE(self, world_grid, unavailable_locs):
         loc = None
+        random.seed(self.seed)
         while world_grid.sum() == 0:
-            rand_x = random.randint(0, self.max_x - 1)  # Make it self.max_x
-            rand_y = random.randint(0, self.max_y - 1)
+            rand_x = random.randint(0, 3)  # Make it self.max_x
+            rand_y = random.randint(0, 3)
             loc = (rand_x, rand_y)
             if loc not in unavailable_locs:
                 world_grid[rand_x, rand_y] = 1
@@ -156,8 +177,11 @@ class WorldEnv(ParallelEnv):
     def get_agent_id(self, agent):
         return self.agent_name_mapping[agent]
 
-    def reset(self):
+    def reset(self, seed=None):
         self.agents = self.possible_agents[:]
+        # self.possible_agents = ['drone_' + str(x) for x in range(self.n_drones)]
+        if seed is not None:
+            random.seed(seed)
         self.num_moves = 0
         all_grids, unavailable_locs = self.initialise_grid(self.humans, self.targets)
         self.all_grids = all_grids
@@ -170,10 +194,18 @@ class WorldEnv(ParallelEnv):
         return observations, infos
 
     def get_action_masks(self, all_grids, agent_num):
-        agents_grid = np.array(all_grids[agent_num+3])
+        agents_grid = all_grids[agent_num+3]
         agent_position = np.argwhere(agents_grid == 1)
+
+        # if agent_position[0] == []:
+        #     return [False, False, False, False]
+        # try:
         # breakpoint()
         current_x, current_y = agent_position[0]
+        # except IndexError as e:
+        #     breakpoint()
+        #     raise e
+            # return [False, False, False, False]
         act_mask = []
         for act in [0, 1, 2, 3]:
             if act == 0:  # Move up
@@ -184,6 +216,7 @@ class WorldEnv(ParallelEnv):
                 new_x, new_y = current_x + 1, current_y
             elif act == 3:  # Move left
                 new_x, new_y = current_x, current_y - 1
+
             if not (0 <= new_x < self.max_x and 0 <= new_y < self.max_y): # if the action takes the drone out of bounds
                 act_mask.append(False)
             else:
@@ -191,7 +224,29 @@ class WorldEnv(ParallelEnv):
                     act_mask.append(False)
                 else:
                     act_mask.append(True)
+
         return act_mask
+
+    def show_grid(self, all_grids):
+        world_grid = np.zeros((self.max_x, self.max_x))
+
+        for i in range(0, 2):
+            agent_position = np.argwhere(all_grids[i] == 1)
+            for (x,y) in agent_position:
+                world_grid[x, y] = 5
+
+        for i in range(2, 3):
+            agent_position = np.argwhere(all_grids[i] == 1)
+            for (x,y) in agent_position:
+                world_grid[x, y] = 4
+
+        for i in range(3, 3+self.n_drones):
+            agent_position = np.argwhere(all_grids[i] == 1)
+            for x, y in agent_position:
+                world_grid[x, y] = i-2
+                print(f'{i=}, {x=}, {y=}')
+
+        print(world_grid)
 
 
     # UPDATE THE CORRESPONDING OHE GRID GIVEN AN ACTION FROM AN AGENT
@@ -199,7 +254,7 @@ class WorldEnv(ParallelEnv):
 
         # Get the grid relating to the specified agent
         agents_grid = all_grids[agent_num]
-        reward = 0
+        reward = -0.1
 
         # Find the current position of the agent
         agent_position = np.argwhere(agents_grid == 1)
@@ -215,6 +270,11 @@ class WorldEnv(ParallelEnv):
             new_x, new_y = current_x, current_y - 1
         else:
             return all_grids, reward
+
+        self.agent_position[agent_num] = (int(new_x), int(new_y))
+
+        # if new_x == 9 and new_y == 9:
+        #     print("ALERT:", agent_num, "found the end zone at", self.num_moves)
 
         # Check if the new position is within the bounds of the grid
         if 0 <= new_x < self.max_x and 0 <= new_y < self.max_y:
@@ -255,6 +315,7 @@ class WorldEnv(ParallelEnv):
             target_location = np.argwhere(new_world[2] == 1)[0]
             if np.array_equal(target_location, new_agent_location):
                 terminations[agent_name] = True
+                self.all_grids[agent_grid_num] = np.zeros((self.max_x, self.max_y))
             else:
                 terminations[agent_name] = False
 
@@ -263,7 +324,7 @@ class WorldEnv(ParallelEnv):
         env_truncation = self.num_moves >= self.max_timesteps
         truncations = {agent: env_truncation for agent in self.agents}
 
-        observations = {agent: self.get_observe(agent) for agent in self.agents}
+        observations = {agent: self.get_observe(agent) for agent in self.agents if not terminations[agent]}
 
         return observations, rewards, terminations, truncations, {}
 
